@@ -14,7 +14,7 @@ API_USER = {
 }
 
 # API URLs
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8080")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://srv.ulug.io")
 API_ENDPOINT_TO_GET_COURSES = "/rest/ulug-auth/v1/builder/getSchools-courses-and-lectures"
 API_ENDPOINT_TO_AUTHENTICATE = "/rest/ulug-noauth/v1/auth/signin"
 API_ENDPOINT_TO_SAVE_LECTURE_VIDEOS = "/rest/ulug-auth/v1/solver/save-lecture-videos"
