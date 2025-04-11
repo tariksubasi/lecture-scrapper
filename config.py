@@ -22,10 +22,20 @@ API_URL_TO_GET_COURSES = API_BASE_URL + API_ENDPOINT_TO_GET_COURSES
 API_URL_TO_AUTHENTICATE = API_BASE_URL + API_ENDPOINT_TO_AUTHENTICATE
 API_URL_TO_SAVE_LECTURE_VIDEOS = API_BASE_URL + API_ENDPOINT_TO_SAVE_LECTURE_VIDEOS
 
+# Duration settings in seconds (default values)
+SCHEDULER_INTERVAL = int(os.environ.get('SCHEDULER_INTERVAL', 3600))  # 1 hour
+
 # YouTube search settings
-MAX_RESULTS_PER_LECTURE = int(os.environ.get("MAX_RESULTS_PER_LECTURE", "10"))  # Default max number of videos per lecture
-MIN_SCROLLS = int(os.environ.get("MIN_SCROLLS", "1"))  # Minimum number of scrolls when searching YouTube
-MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "10"))  # Maximum number of scrolls when searching YouTube
+MIN_SCROLLS = int(os.environ.get('MIN_SCROLLS', 2))        # Minimum number of scrolls on YouTube
+MAX_SCROLLS = int(os.environ.get('MAX_SCROLLS', 5))        # Maximum number of scrolls on YouTube
+MAX_RESULTS_PER_LECTURE = int(os.environ.get('MAX_RESULTS_PER_LECTURE', 5))  # Reduced from 10 to 5 to conserve memory
+
+# File paths
+DATABASE_FILE = os.environ.get('DATABASE_FILE', 'data/lecture_videos.json')
+SCHOOLS_DATA_FILE = os.environ.get('SCHOOLS_DATA_FILE', 'data/schools.json')
+
+# Running type
+ENVIRONMENT = os.environ.get('FLASK_ENV', 'production')  # Default is production
 
 # Schedule settings
 SCHEDULE_TIME = os.environ.get("SCHEDULE_TIME", "00:40")  # Daily job execution time 

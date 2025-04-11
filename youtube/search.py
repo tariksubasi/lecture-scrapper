@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 import requests
 import sys
 import subprocess
+import gc
 
 # Import configuration
 sys.path.append('..')
@@ -70,6 +71,32 @@ def initialize_driver():
     chrome_options.add_argument("--headless")  # Run browser in invisible mode
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    # Memory optimization settings
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-setuid-sandbox")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--window-size=1280,720")  # Smaller window size
+    
+    # Additional memory optimizations
+    chrome_options.add_argument("--js-flags=--expose-gc")
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--disable-application-cache")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-browser-side-navigation")
+    chrome_options.add_argument("--disable-features=TranslateUI")
+    chrome_options.add_argument("--disable-translate")
+    chrome_options.add_argument("--disable-notifications")
+    chrome_options.add_argument("--disable-popup-blocking")
+    chrome_options.add_argument("--disable-save-password-bubble")
+    chrome_options.add_argument("--disable-session-crashed-bubble")
+    chrome_options.add_argument("--disable-hang-monitor")
+    chrome_options.add_argument("--disable-component-update")
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # Disable image loading
+    
+    # Add JavaScript heap size limit (128MB)
+    chrome_options.add_argument("--js-flags=--max-old-space-size=128")
     
     # Search for Chrome in possible locations based on OS
     chrome_bin = None
@@ -141,16 +168,9 @@ def initialize_driver():
         # If Chrome is not found in known locations, let webdriver_manager try to find it
         print("No Chrome binary found in expected locations. Will let WebDriver Manager handle it.")
     
-    # Specify a unique user data directory
+    # Specify a unique user data directory - use a subdirectory of /tmp to minimize disk space
     temp_dir = os.path.join(tempfile.gettempdir(), f"chrome_temp_{os.getpid()}")
     chrome_options.add_argument(f"--user-data-dir={temp_dir}")
-    
-    # Additional settings
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-setuid-sandbox")
-    chrome_options.add_argument("--remote-debugging-port=9222")
-    chrome_options.add_argument("--window-size=1920,1080")
     
     # Start WebDriver using webdriver-manager
     print("Initializing Chrome WebDriver...")
@@ -193,6 +213,33 @@ def initialize_driver():
     print("Chrome WebDriver initialized successfully!")
     return driver
 
+def cleanup_memory():
+    """
+    Force garbage collection and memory cleanup
+    """
+    gc.collect()
+    
+def clear_browser_data(driver):
+    """
+    Clear browser cache, cookies, and other storage to free up memory.
+    
+    Args:
+        driver (WebDriver): The WebDriver instance to clean
+    """
+    if driver:
+        try:
+            # Clear various browser storage mechanisms
+            driver.execute_script("window.localStorage.clear();")
+            driver.execute_script("window.sessionStorage.clear();")
+            driver.delete_all_cookies()
+            
+            # Execute JavaScript garbage collection
+            driver.execute_script("if (window.gc) window.gc();")
+            
+            print("Browser data cleared")
+        except Exception as e:
+            print(f"Error clearing browser data: {e}")
+
 def close_driver(driver):
     """
     Safely close a WebDriver instance and clean up resources.
@@ -202,6 +249,8 @@ def close_driver(driver):
     """
     if driver:
         try:
+            # First clear data before quitting
+            clear_browser_data(driver)
             driver.quit()
             print("WebDriver closed successfully")
         except Exception as e:
@@ -214,6 +263,9 @@ def close_driver(driver):
         shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception as e:
         print(f"Error cleaning up temp directory: {e}")
+    
+    # Force garbage collection
+    cleanup_memory()
 
 def get_youtube_videos(query: str, max_results: int = 15, driver: Optional[webdriver.Chrome] = None) -> List[Dict[str, Any]]:
     """
@@ -233,6 +285,9 @@ def get_youtube_videos(query: str, max_results: int = 15, driver: Optional[webdr
         # Create a new driver if one wasn't provided
         if not driver_was_provided:
             driver = initialize_driver()
+        else:
+            # Clear browser data between searches to reduce memory usage
+            clear_browser_data(driver)
             
         # Go to YouTube search page and search for query (by relevance)
         driver.get("https://www.youtube.com/results?search_query=" + query.replace(" ", "+"))
@@ -388,6 +443,11 @@ def get_youtube_videos(query: str, max_results: int = 15, driver: Optional[webdr
                     embeddable_videos.append(video_info)
                     print(f"Found embeddable video ({len(embeddable_videos)}/{max_results}): {title}")
             
+            # Clear parsed data to free memory
+            del soup
+            del page_source
+            cleanup_memory()
+            
             # Scroll down to load more videos
             driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.END)
             time.sleep(2)
@@ -410,6 +470,8 @@ def get_youtube_videos(query: str, max_results: int = 15, driver: Optional[webdr
         return []
         
     finally:
+        # Clear memory even if using existing driver
+        cleanup_memory()
         # Close the driver only if we created it in this function
         if not driver_was_provided:
             close_driver(driver)
