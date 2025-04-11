@@ -38,7 +38,9 @@ def get_chrome_version(chrome_binary):
     try:
         if platform.system() == "Windows":
             # Windows method - use WMIC
-            cmd = f'wmic datafile where name="{chrome_binary.replace("\\", "\\\\")}" get Version /value'
+            # Fix f-string backslash issue
+            path_for_cmd = chrome_binary.replace("\\", "\\\\")
+            cmd = 'wmic datafile where name="' + path_for_cmd + '" get Version /value'
             output = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
             if "Version=" in output:
                 return output.split("=")[1]
