@@ -10,6 +10,8 @@ from youtube.processor import get_lecture_videos
 from utils.scheduler import save_results_to_json
 import threading
 import time
+import schedule
+import config
 
 app = Flask(__name__)
 
@@ -20,16 +22,26 @@ last_job_result = {
     "video_count": 0
 }
 
-def run_job():
+# Flag to prevent multiple jobs running simultaneously
+job_running = False
+job_lock = threading.Lock()
+
+def job():
     """
     Main job function to search for YouTube videos and save them to the API.
     """
-    global last_job_result
+    global last_job_result, job_running
     
-    start_time = time.strftime('%Y-%m-%d %H:%M:%S')
-    print(f"Starting YouTube video search process... {start_time}")
+    with job_lock:
+        if job_running:
+            print("Job already running, skipping...")
+            return
+        job_running = True
     
     try:
+        start_time = time.strftime('%Y-%m-%d %H:%M:%S')
+        print(f"Starting YouTube video search process... {start_time}")
+        
         # Get schools on each run (to refresh token)
         current_schools = get_courses_from_api()
         
@@ -75,6 +87,39 @@ def run_job():
             "video_count": 0
         }
         print(f"Error in job: {str(e)}")
+    finally:
+        with job_lock:
+            job_running = False
+
+def scheduler_thread():
+    """
+    Background thread that runs the scheduler.
+    """
+    schedule_time = config.SCHEDULE_TIME
+    schedule.every().day.at(schedule_time).do(job)
+    
+    print(f"YouTube video search service started. {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Will run automatically every day at {schedule_time}.")
+    
+    # Check for first run
+    # current_hour = time.localtime().tm_hour
+    # current_min = time.localtime().tm_min
+    # schedule_hour = int(schedule_time.split(':')[0])
+    # schedule_min = int(schedule_time.split(':')[1])
+    
+    # if current_hour == schedule_hour and current_min >= schedule_min and current_min < schedule_min + 2:
+    #     print("Matched start time, running immediately...")
+        #job()
+    
+    # Infinite loop to check scheduler
+    while True:
+        try:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+        except Exception as e:
+            print(f"Scheduler error: {str(e)}")
+            # Wait 5 minutes and try again on error
+            time.sleep(300)
 
 @app.route('/')
 def home():
@@ -96,7 +141,7 @@ def status():
 @app.route('/run', methods=['POST'])
 def trigger_job():
     # Start the job in a separate thread to avoid blocking the request
-    thread = threading.Thread(target=run_job)
+    thread = threading.Thread(target=job)
     thread.daemon = True
     thread.start()
     return jsonify({"status": "Job started", "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')})
@@ -116,6 +161,15 @@ def get_videos():
         return jsonify(videos)
     except Exception as e:
         return jsonify({"error": f"Could not get videos: {str(e)}"}), 500
+
+# Start the scheduler in a background thread when the app starts
+def start_scheduler():
+    thread = threading.Thread(target=scheduler_thread)
+    thread.daemon = True
+    thread.start()
+
+# Start the scheduler when the app is initialized
+start_scheduler()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

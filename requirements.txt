@@ -6,4 +6,5 @@ urllib3==1.26.15
 flask==2.0.3
 werkzeug==2.0.3
 gunicorn==20.1.0
-python-dotenv==1.0.0 
+python-dotenv==1.0.0
+webdriver-manager==4.0.2 

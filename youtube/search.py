@@ -9,6 +9,8 @@ import tempfile
 from typing import List, Dict, Any, Set
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
@@ -47,16 +49,10 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    # Heroku-specific configuration
-    chrome_bin = os.environ.get("GOOGLE_CHROME_BIN", "chrome")
-    chrome_driver_path = os.environ.get("CHROMEDRIVER_PATH", None)
-    
     try:
-        # Start WebDriver
-        if chrome_driver_path:
-            driver = webdriver.Chrome(executable_path=chrome_driver_path, options=chrome_options)
-        else:
-            driver = webdriver.Chrome(options=chrome_options)
+        # Start WebDriver using webdriver-manager
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
         
         # Go to YouTube search page and search for query (by relevance)
         driver.get("https://www.youtube.com/results?search_query=" + query.replace(" ", "+"))

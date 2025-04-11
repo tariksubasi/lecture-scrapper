@@ -28,4 +28,4 @@ MIN_SCROLLS = int(os.environ.get("MIN_SCROLLS", "1"))  # Minimum number of scrol
 MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "10"))  # Maximum number of scrolls when searching YouTube
 
 # Schedule settings
-SCHEDULE_TIME = os.environ.get("SCHEDULE_TIME", "02:00")  # Daily job execution time 
+SCHEDULE_TIME = os.environ.get("SCHEDULE_TIME", "23:46")  # Daily job execution time 
