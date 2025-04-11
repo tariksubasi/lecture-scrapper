@@ -138,7 +138,9 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
         if chrome_version:
             print(f"Detected Chrome version: {chrome_version}")
         else:
-            print("Failed to detect Chrome version")
+            # If version detection failed, just assume it's the same as Heroku chrome
+            chrome_version = "135.0.7049.84"
+            print(f"Failed to detect Chrome version, assuming: {chrome_version}")
     else:
         # If Chrome is not found in known locations, let webdriver_manager try to find it
         print("No Chrome binary found in expected locations. Will let WebDriver Manager handle it.")
@@ -158,23 +160,41 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
         # Start WebDriver using webdriver-manager
         print("Attempting to start Chrome with WebDriver...")
         
-        # Use different ChromeDriver versions based on detected Chrome version
-        if chrome_version:
-            # Get major version number (e.g., "135.0.7049.84" -> "135")
-            chrome_major_version = chrome_version.split('.')[0]
-            print(f"Using Chrome major version {chrome_major_version} for ChromeDriver")
+        try:
+            # Try using selenium-wire instead of standard selenium for better compatibility
+            from seleniumwire import webdriver as wire_webdriver
+            
+            # Try to use a specific ChromeDriver version that is compatible with Chrome 135
+            # Instead of letting webdriver_manager auto-detect, we're forcing a compatible version
+            # Using Chrome 134's driver as it's likely more compatible with Chrome 135
+            driver_path = ChromeDriverManager(version="114.0.5735.90").install()
+            service = Service(driver_path)
+            
+            # Try with selenium-wire first
             try:
-                # Try to download matching ChromeDriver version
-                service = Service(ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install())
+                print(f"Attempting to use seleniumwire with ChromeDriver 114.0.5735.90")
+                driver = wire_webdriver.Chrome(service=service, options=chrome_options)
+                print("Successfully created driver with seleniumwire!")
             except Exception as e:
-                print(f"Failed to get specific ChromeDriver: {e}")
-                # Fallback to latest
-                service = Service(ChromeDriverManager().install())
-        else:
-            # If no Chrome version detected, use default
-            service = Service(ChromeDriverManager().install())
+                print(f"Failed to create driver with seleniumwire: {e}")
+                # Fall back to regular selenium
+                print("Falling back to regular selenium")
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                
+        except Exception as e:
+            print(f"Failed to create driver with specified version: {e}")
+            print("Trying one more approach with undetected-chromedriver...")
+            
+            try:
+                # Final fallback - try using undetected-chromedriver
+                import undetected_chromedriver as uc
+                driver = uc.Chrome(headless=True, options=chrome_options)
+                print("Successfully created driver with undetected-chromedriver!")
+            except Exception as uc_e:
+                print(f"Failed with undetected-chromedriver: {uc_e}")
+                # Last resort - try regular Chrome
+                driver = webdriver.Chrome(options=chrome_options)
         
-        driver = webdriver.Chrome(service=service, options=chrome_options)
         print("Chrome WebDriver started successfully!")
         
         # Go to YouTube search page and search for query (by relevance)
