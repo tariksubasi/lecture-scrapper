@@ -6,6 +6,7 @@ import time
 import re
 import os
 import tempfile
+import glob
 from typing import List, Dict, Any, Set
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -38,9 +39,45 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     
-    # Heroku-specific configuration
-    chrome_bin = os.environ.get("GOOGLE_CHROME_BIN", "/app/.apt/usr/bin/google-chrome")
+    # Search for Chrome in possible locations on Heroku
+    chrome_bin = None
+    possible_chrome_paths = [
+        # For heroku-buildpack-chrome-for-testing
+        '/app/.chrome/chrome/chrome',
+        '/app/.apt/usr/bin/google-chrome',
+        # For older buildpack
+        '/app/.apt/opt/google/chrome/chrome',
+        '/app/.heroku/google-chrome/bin/chrome',
+        # For newer versions
+        '/app/.chrome-for-testing/chrome-linux64/chrome',
+        # Environment variables
+        os.environ.get('GOOGLE_CHROME_BIN'),
+        os.environ.get('GOOGLE_CHROME_SHIM'),
+        # Default for local development
+        'chrome'
+    ]
+    
+    # Additional search for Chrome in the filesystem
+    try:
+        chrome_paths_found = glob.glob('/app/**/*chrome*', recursive=True)
+        print(f"Found Chrome binaries on filesystem: {chrome_paths_found}")
+        possible_chrome_paths.extend(chrome_paths_found)
+    except Exception as e:
+        print(f"Error searching filesystem for Chrome: {e}")
+    
+    # Try each path
+    for path in possible_chrome_paths:
+        if path and os.path.exists(path) and os.access(path, os.X_OK):
+            chrome_bin = path
+            print(f"Found Chrome binary at: {chrome_bin}")
+            break
+    
+    if not chrome_bin:
+        print("WARNING: Could not find Chrome binary in expected locations. Will use default.")
+        chrome_bin = "chrome"  # Try using system default as last resort
+    
     chrome_options.binary_location = chrome_bin
+    print(f"Setting chrome binary location to: {chrome_bin}")
     
     # Specify a unique user data directory
     temp_dir = os.path.join(tempfile.gettempdir(), f"chrome_temp_{os.getpid()}")
@@ -55,8 +92,10 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     
     try:
         # Start WebDriver using webdriver-manager
+        print("Attempting to start Chrome with WebDriver...")
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        print("Chrome WebDriver started successfully!")
         
         # Go to YouTube search page and search for query (by relevance)
         driver.get("https://www.youtube.com/results?search_query=" + query.replace(" ", "+"))
@@ -229,6 +268,8 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
         
     except Exception as e:
         print(f"Error while starting WebDriver: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return []
         
     finally:

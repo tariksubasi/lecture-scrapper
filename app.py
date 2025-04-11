@@ -4,6 +4,7 @@ Flask application for YouTube embedding service.
 
 import os
 import json
+import subprocess
 from flask import Flask, jsonify, request
 from api.client import get_courses_from_api, save_lecture_videos_to_api
 from youtube.processor import get_lecture_videos
@@ -12,6 +13,7 @@ import threading
 import time
 import schedule
 import config
+import glob
 
 app = Flask(__name__)
 
@@ -102,14 +104,14 @@ def scheduler_thread():
     print(f"Will run automatically every day at {schedule_time}.")
     
     # Check for first run
-    # current_hour = time.localtime().tm_hour
-    # current_min = time.localtime().tm_min
-    # schedule_hour = int(schedule_time.split(':')[0])
-    # schedule_min = int(schedule_time.split(':')[1])
+    current_hour = time.localtime().tm_hour
+    current_min = time.localtime().tm_min
+    schedule_hour = int(schedule_time.split(':')[0])
+    schedule_min = int(schedule_time.split(':')[1])
     
-    # if current_hour == schedule_hour and current_min >= schedule_min and current_min < schedule_min + 2:
-    #     print("Matched start time, running immediately...")
-        #job()
+    if current_hour == schedule_hour and current_min >= schedule_min and current_min < schedule_min + 2:
+        print("Matched start time, running immediately...")
+        job()
     
     # Infinite loop to check scheduler
     while True:
@@ -130,7 +132,8 @@ def home():
             "/status - Get the status of the last job",
             "/run - Trigger a new job",
             "/api/courses - Get courses from the API",
-            "/api/videos - Get found videos"
+            "/api/videos - Get found videos",
+            "/diagnostics - Get system diagnostics"
         ]
     })
 
@@ -161,6 +164,61 @@ def get_videos():
         return jsonify(videos)
     except Exception as e:
         return jsonify({"error": f"Could not get videos: {str(e)}"}), 500
+
+@app.route('/diagnostics')
+def diagnostics():
+    """
+    Get system diagnostics, useful for troubleshooting Chrome/Selenium issues
+    """
+    diagnostics_info = {}
+    
+    # Check for Chrome in possible locations
+    chrome_locations = [
+        '/app/.chrome/chrome/chrome',
+        '/app/.apt/usr/bin/google-chrome',
+        '/app/.apt/opt/google/chrome/chrome',
+        '/app/.heroku/google-chrome/bin/chrome',
+        '/app/.chrome-for-testing/chrome-linux64/chrome'
+    ]
+    
+    chrome_locations_status = {}
+    for location in chrome_locations:
+        chrome_locations_status[location] = os.path.exists(location)
+    
+    diagnostics_info['chrome_locations'] = chrome_locations_status
+    
+    # Search for Chrome in the filesystem
+    try:
+        chrome_paths_found = glob.glob('/app/**/*chrome*', recursive=True)
+        diagnostics_info['chrome_paths_found'] = chrome_paths_found
+    except Exception as e:
+        diagnostics_info['chrome_paths_found_error'] = str(e)
+    
+    # Check environment variables
+    env_vars = {}
+    for var in ['GOOGLE_CHROME_BIN', 'GOOGLE_CHROME_SHIM', 'CHROME_EXECUTABLE_PATH', 'PATH']:
+        env_vars[var] = os.environ.get(var, 'Not set')
+    
+    diagnostics_info['environment_variables'] = env_vars
+    
+    # Check Chrome version if available
+    try:
+        for chrome_path in chrome_locations:
+            if os.path.exists(chrome_path):
+                chrome_version = subprocess.check_output([chrome_path, '--version'], stderr=subprocess.STDOUT).decode().strip()
+                diagnostics_info['chrome_version'] = chrome_version
+                break
+    except Exception as e:
+        diagnostics_info['chrome_version_error'] = str(e)
+    
+    # Check buildpacks
+    try:
+        buildpacks = subprocess.check_output(['heroku', 'buildpacks', '--app', os.environ.get('HEROKU_APP_NAME', '')], stderr=subprocess.STDOUT).decode().strip()
+        diagnostics_info['buildpacks'] = buildpacks
+    except Exception as e:
+        diagnostics_info['buildpacks_error'] = str(e)
+    
+    return jsonify(diagnostics_info)
 
 # Start the scheduler in a background thread when the app starts
 def start_scheduler():
