@@ -7,20 +7,54 @@ import re
 import os
 import tempfile
 import glob
+import platform
 from typing import List, Dict, Any, Set
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup
 import requests
 import sys
+import subprocess
 
 # Import configuration
 sys.path.append('..')
 import config
+
+def get_chrome_version(chrome_binary):
+    """
+    Get the version of Chrome from the binary.
+    
+    Args:
+        chrome_binary (str): Path to Chrome binary
+        
+    Returns:
+        str: Chrome version or None if not found
+    """
+    try:
+        if platform.system() == "Windows":
+            # Windows method - use WMIC
+            cmd = f'wmic datafile where name="{chrome_binary.replace("\\", "\\\\")}" get Version /value'
+            output = subprocess.check_output(cmd, shell=True).decode('utf-8').strip()
+            if "Version=" in output:
+                return output.split("=")[1]
+        else:
+            # Linux/Mac method - use Chrome --version
+            cmd = [chrome_binary, '--version']
+            output = subprocess.check_output(cmd).decode('utf-8').strip()
+            # Extract version number (e.g., "Google Chrome 135.0.7049.84" -> "135.0.7049.84")
+            if "Chrome" in output:
+                version = re.search(r'Chrome\s+(\d+\.\d+\.\d+\.\d+)', output)
+                if version:
+                    return version.group(1)
+    except Exception as e:
+        print(f"Failed to get Chrome version: {e}")
+    
+    return None
 
 def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]]:
     """
@@ -39,31 +73,51 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     
-    # Search for Chrome in possible locations on Heroku
+    # Search for Chrome in possible locations based on OS
     chrome_bin = None
-    possible_chrome_paths = [
-        # For heroku-buildpack-chrome-for-testing
-        '/app/.chrome/chrome/chrome',
-        '/app/.apt/usr/bin/google-chrome',
-        # For older buildpack
-        '/app/.apt/opt/google/chrome/chrome',
-        '/app/.heroku/google-chrome/bin/chrome',
-        # For newer versions
-        '/app/.chrome-for-testing/chrome-linux64/chrome',
-        # Environment variables
-        os.environ.get('GOOGLE_CHROME_BIN'),
-        os.environ.get('GOOGLE_CHROME_SHIM'),
-        # Default for local development
-        'chrome'
-    ]
     
-    # Additional search for Chrome in the filesystem
-    try:
-        chrome_paths_found = glob.glob('/app/**/*chrome*', recursive=True)
-        print(f"Found Chrome binaries on filesystem: {chrome_paths_found}")
-        possible_chrome_paths.extend(chrome_paths_found)
-    except Exception as e:
-        print(f"Error searching filesystem for Chrome: {e}")
+    # Windows-specific paths
+    if platform.system() == "Windows":
+        possible_chrome_paths = [
+            # Common Windows Chrome locations
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            # User directory Chrome installation
+            os.path.join(os.environ.get('LOCALAPPDATA', ''), r"Google\Chrome\Application\chrome.exe"),
+            # Environment variables
+            os.environ.get('CHROME_EXECUTABLE_PATH'),
+        ]
+        print(f"Searching for Chrome on Windows platform...")
+    # Heroku/Linux paths
+    else:
+        possible_chrome_paths = [
+            # For heroku-buildpack-chrome-for-testing
+            '/app/.chrome/chrome/chrome',
+            '/app/.apt/usr/bin/google-chrome',
+            # For older buildpack
+            '/app/.apt/opt/google/chrome/chrome',
+            '/app/.heroku/google-chrome/bin/chrome',
+            # For newer versions
+            '/app/.chrome-for-testing/chrome-linux64/chrome',
+            # Environment variables
+            os.environ.get('GOOGLE_CHROME_BIN'),
+            os.environ.get('GOOGLE_CHROME_SHIM'),
+            # Default Linux paths
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium-browser',
+            'chrome'
+        ]
+        print(f"Searching for Chrome on non-Windows platform...")
+        
+        # Additional search for Chrome in the filesystem on Linux/Heroku
+        try:
+            if os.path.exists('/app'):  # Check if we're on Heroku
+                chrome_paths_found = glob.glob('/app/**/*chrome*', recursive=True)
+                print(f"Found Chrome binaries on filesystem: {chrome_paths_found}")
+                possible_chrome_paths.extend(chrome_paths_found)
+        except Exception as e:
+            print(f"Error searching filesystem for Chrome: {e}")
     
     # Try each path
     for path in possible_chrome_paths:
@@ -72,12 +126,20 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
             print(f"Found Chrome binary at: {chrome_bin}")
             break
     
-    if not chrome_bin:
-        print("WARNING: Could not find Chrome binary in expected locations. Will use default.")
-        chrome_bin = "chrome"  # Try using system default as last resort
-    
-    chrome_options.binary_location = chrome_bin
-    print(f"Setting chrome binary location to: {chrome_bin}")
+    chrome_version = None
+    if chrome_bin:
+        # Set Chrome binary location if found
+        chrome_options.binary_location = chrome_bin
+        print(f"Setting chrome binary location to: {chrome_bin}")
+        # Try to get Chrome version
+        chrome_version = get_chrome_version(chrome_bin)
+        if chrome_version:
+            print(f"Detected Chrome version: {chrome_version}")
+        else:
+            print("Failed to detect Chrome version")
+    else:
+        # If Chrome is not found in known locations, let webdriver_manager try to find it
+        print("No Chrome binary found in expected locations. Will let WebDriver Manager handle it.")
     
     # Specify a unique user data directory
     temp_dir = os.path.join(tempfile.gettempdir(), f"chrome_temp_{os.getpid()}")
@@ -93,7 +155,23 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     try:
         # Start WebDriver using webdriver-manager
         print("Attempting to start Chrome with WebDriver...")
-        service = Service(ChromeDriverManager().install())
+        
+        # Use different ChromeDriver versions based on detected Chrome version
+        if chrome_version:
+            # Get major version number (e.g., "135.0.7049.84" -> "135")
+            chrome_major_version = chrome_version.split('.')[0]
+            print(f"Using Chrome major version {chrome_major_version} for ChromeDriver")
+            try:
+                # Try to download matching ChromeDriver version
+                service = Service(ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install())
+            except Exception as e:
+                print(f"Failed to get specific ChromeDriver: {e}")
+                # Fallback to latest
+                service = Service(ChromeDriverManager().install())
+        else:
+            # If no Chrome version detected, use default
+            service = Service(ChromeDriverManager().install())
+        
         driver = webdriver.Chrome(service=service, options=chrome_options)
         print("Chrome WebDriver started successfully!")
         
