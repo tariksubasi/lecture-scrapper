@@ -38,6 +38,10 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     
+    # Heroku-specific configuration
+    chrome_bin = os.environ.get("GOOGLE_CHROME_BIN", "/app/.apt/usr/bin/google-chrome")
+    chrome_options.binary_location = chrome_bin
+    
     # Specify a unique user data directory
     temp_dir = os.path.join(tempfile.gettempdir(), f"chrome_temp_{os.getpid()}")
     chrome_options.add_argument(f"--user-data-dir={temp_dir}")
