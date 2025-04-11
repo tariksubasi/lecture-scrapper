@@ -8,7 +8,7 @@ import os
 import tempfile
 import glob
 import platform
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -58,16 +58,12 @@ def get_chrome_version(chrome_binary):
     
     return None
 
-def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]]:
+def initialize_driver():
     """
-    Searches YouTube for a specific query, finds embeddable videos and sorts them by view count.
+    Initialize and return a Chrome WebDriver instance.
     
-    Args:
-        query (str): Search query
-        max_results (int): Maximum number of videos to return
-        
     Returns:
-        list: List of dictionaries containing video information
+        WebDriver: A configured Chrome WebDriver instance
     """
     # Configure Chrome settings
     chrome_options = Options()
@@ -156,47 +152,88 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
     chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument("--window-size=1920,1080")
     
+    # Start WebDriver using webdriver-manager
+    print("Initializing Chrome WebDriver...")
+    
+    driver = None
     try:
-        # Start WebDriver using webdriver-manager
-        print("Attempting to start Chrome with WebDriver...")
+        # Try using selenium-wire instead of standard selenium for better compatibility
+        from seleniumwire import webdriver as wire_webdriver
+        
+        # Try to use a specific ChromeDriver version that is compatible with Chrome 135
+        # Instead of letting webdriver_manager auto-detect, we're forcing a compatible version
+        driver_path = ChromeDriverManager(version="114.0.5735.90").install()
+        service = Service(driver_path)
+        
+        # Try with selenium-wire first
+        try:
+            print(f"Attempting to use seleniumwire with ChromeDriver 114.0.5735.90")
+            driver = wire_webdriver.Chrome(service=service, options=chrome_options)
+            print("Successfully created driver with seleniumwire!")
+        except Exception as e:
+            print(f"Failed to create driver with seleniumwire: {e}")
+            # Fall back to regular selenium
+            print("Falling back to regular selenium")
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            
+    except Exception as e:
+        print(f"Failed to create driver with specified version: {e}")
+        print("Trying one more approach with undetected-chromedriver...")
         
         try:
-            # Try using selenium-wire instead of standard selenium for better compatibility
-            from seleniumwire import webdriver as wire_webdriver
-            
-            # Try to use a specific ChromeDriver version that is compatible with Chrome 135
-            # Instead of letting webdriver_manager auto-detect, we're forcing a compatible version
-            # Using Chrome 134's driver as it's likely more compatible with Chrome 135
-            driver_path = ChromeDriverManager(version="114.0.5735.90").install()
-            service = Service(driver_path)
-            
-            # Try with selenium-wire first
-            try:
-                print(f"Attempting to use seleniumwire with ChromeDriver 114.0.5735.90")
-                driver = wire_webdriver.Chrome(service=service, options=chrome_options)
-                print("Successfully created driver with seleniumwire!")
-            except Exception as e:
-                print(f"Failed to create driver with seleniumwire: {e}")
-                # Fall back to regular selenium
-                print("Falling back to regular selenium")
-                driver = webdriver.Chrome(service=service, options=chrome_options)
-                
+            # Final fallback - try using undetected-chromedriver
+            import undetected_chromedriver as uc
+            driver = uc.Chrome(headless=True, options=chrome_options)
+            print("Successfully created driver with undetected-chromedriver!")
+        except Exception as uc_e:
+            print(f"Failed with undetected-chromedriver: {uc_e}")
+            # Last resort - try regular Chrome
+            driver = webdriver.Chrome(options=chrome_options)
+    
+    print("Chrome WebDriver initialized successfully!")
+    return driver
+
+def close_driver(driver):
+    """
+    Safely close a WebDriver instance and clean up resources.
+    
+    Args:
+        driver (WebDriver): The WebDriver instance to close
+    """
+    if driver:
+        try:
+            driver.quit()
+            print("WebDriver closed successfully")
         except Exception as e:
-            print(f"Failed to create driver with specified version: {e}")
-            print("Trying one more approach with undetected-chromedriver...")
+            print(f"Error closing WebDriver: {e}")
+    
+    # Try to clean up temporary directory
+    try:
+        temp_dir = os.path.join(tempfile.gettempdir(), f"chrome_temp_{os.getpid()}")
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        print(f"Error cleaning up temp directory: {e}")
+
+def get_youtube_videos(query: str, max_results: int = 15, driver: Optional[webdriver.Chrome] = None) -> List[Dict[str, Any]]:
+    """
+    Searches YouTube for a specific query, finds embeddable videos and sorts them by view count.
+    
+    Args:
+        query (str): Search query
+        max_results (int): Maximum number of videos to return
+        driver (WebDriver, optional): An existing WebDriver instance to reuse
+        
+    Returns:
+        list: List of dictionaries containing video information
+    """
+    driver_was_provided = driver is not None
+    
+    try:
+        # Create a new driver if one wasn't provided
+        if not driver_was_provided:
+            driver = initialize_driver()
             
-            try:
-                # Final fallback - try using undetected-chromedriver
-                import undetected_chromedriver as uc
-                driver = uc.Chrome(headless=True, options=chrome_options)
-                print("Successfully created driver with undetected-chromedriver!")
-            except Exception as uc_e:
-                print(f"Failed with undetected-chromedriver: {uc_e}")
-                # Last resort - try regular Chrome
-                driver = webdriver.Chrome(options=chrome_options)
-        
-        print("Chrome WebDriver started successfully!")
-        
         # Go to YouTube search page and search for query (by relevance)
         driver.get("https://www.youtube.com/results?search_query=" + query.replace(" ", "+"))
         # Note: CAMSAhAB parameter removed to use default relevance sorting
@@ -367,23 +404,15 @@ def get_youtube_videos(query: str, max_results: int = 15) -> List[Dict[str, Any]
         return embeddable_videos[:max_results]  # Return only the requested number of videos
         
     except Exception as e:
-        print(f"Error while starting WebDriver: {str(e)}")
+        print(f"Error while searching YouTube: {str(e)}")
         import traceback
         traceback.print_exc()
         return []
         
     finally:
-        try:
-            driver.quit()
-        except:
-            pass
-        
-        # Try to clean up temporary directory
-        try:
-            import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        except:
-            pass
+        # Close the driver only if we created it in this function
+        if not driver_was_provided:
+            close_driver(driver)
 
 def check_embeddable(video_id: str) -> bool:
     """
