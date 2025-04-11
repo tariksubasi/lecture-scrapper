@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+env/
+
+# Output files
+lecture_videos.json
+
+# Temp files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+tmp/
+temp/
+
+# Heroku
+.heroku
+
+# Selenium
+chromedriver
+geckodriver
+chromedriver.exe
+geckodriver.exe 
