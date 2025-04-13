@@ -27,5 +27,9 @@ MAX_RESULTS_PER_LECTURE = int(os.environ.get("MAX_RESULTS_PER_LECTURE", "10"))  
 MIN_SCROLLS = int(os.environ.get("MIN_SCROLLS", "1"))  # Minimum number of scrolls when searching YouTube
 MAX_SCROLLS = int(os.environ.get("MAX_SCROLLS", "10"))  # Maximum number of scrolls when searching YouTube
 
+# WebDriver settings
+WEBDRIVER_TIMEOUT = int(os.environ.get("WEBDRIVER_TIMEOUT", "60"))  # Timeout in seconds for WebDriver operations
+WEBDRIVER_MAX_LIFETIME = int(os.environ.get("WEBDRIVER_MAX_LIFETIME", "1800"))  # Maximum lifetime of a WebDriver instance in seconds (30 minutes)
+
 # Schedule settings
 SCHEDULE_TIME = os.environ.get("SCHEDULE_TIME", "00:40")  # Daily job execution time 

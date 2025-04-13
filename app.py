@@ -89,9 +89,18 @@ def job():
             "video_count": 0
         }
         print(f"Error in job: {str(e)}")
+        import traceback
+        traceback.print_exc()
     finally:
         with job_lock:
             job_running = False
+        
+        # Ensure the WebDriver is always properly shutdown
+        try:
+            from youtube.search import shutdown_driver
+            shutdown_driver()
+        except Exception as e:
+            print(f"Error shutting down WebDriver: {str(e)}")
 
 def scheduler_thread():
     """
