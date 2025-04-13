@@ -8,6 +8,7 @@ import os
 import tempfile
 import glob
 import platform
+import psutil  # Bellek kullanımını izlemek için
 from typing import List, Dict, Any, Set, Optional
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -23,15 +24,18 @@ from bs4 import BeautifulSoup
 import requests
 import sys
 import subprocess
+import gc  # For garbage collection
 
 # Import configuration
 sys.path.append('..')
 import config
 
-# Global WebDriver instance that will be reused across searches
+# Global WebDriver instance statistics - NOT the actual driver
 global_driver = None
 driver_creation_time = 0  # Track when the driver was created
+searches_with_current_driver = 0  # Track how many searches have been done with the current driver
 MAX_DRIVER_LIFETIME = config.WEBDRIVER_MAX_LIFETIME  # Maximum driver lifetime in seconds
+MAX_SEARCHES_PER_DRIVER = config.WEBDRIVER_MAX_SEARCHES  # Recreate driver after this many searches to free memory
 
 def get_chrome_version(chrome_binary):
     """
@@ -66,6 +70,45 @@ def get_chrome_version(chrome_binary):
     
     return None
 
+def get_memory_usage():
+    """
+    Get current memory usage of the process in MB.
+    
+    Returns:
+        float: Memory usage in MB
+    """
+    try:
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        # Convert to MB
+        memory_mb = memory_info.rss / 1024 / 1024
+        return memory_mb
+    except:
+        # Return -1 if can't get memory info
+        return -1
+
+def check_memory_limit():
+    """
+    Check if memory usage exceeds the limit and return whether driver should be restarted.
+    
+    Returns:
+        bool: True if memory limit exceeded, False otherwise
+    """
+    try:
+        memory_mb = get_memory_usage()
+        memory_limit = config.WEBDRIVER_MEMORY_LIMIT
+        
+        if memory_mb > 0 and memory_mb > memory_limit:
+            print(f"Memory usage ({memory_mb:.1f} MB) exceeds limit ({memory_limit} MB). Will recreate driver.")
+            return True
+        elif memory_mb > 0:
+            print(f"Current memory usage: {memory_mb:.1f} MB (limit: {memory_limit} MB)")
+            
+        return False
+    except:
+        # Can't check memory, so don't force restart
+        return False
+
 def initialize_driver(force_new=False):
     """
     Initialize or return the global WebDriver instance.
@@ -76,14 +119,23 @@ def initialize_driver(force_new=False):
     Returns:
         WebDriver: The WebDriver instance
     """
-    global global_driver, driver_creation_time
+    global global_driver, driver_creation_time, searches_with_current_driver
     
     current_time = time.time()
+    
+    # Check if memory limit exceeded
+    memory_limit_exceeded = check_memory_limit()
     
     # Check if we need to create a new driver
     if (global_driver is None or 
         force_new or 
+        memory_limit_exceeded or
+        searches_with_current_driver >= MAX_SEARCHES_PER_DRIVER or
         (driver_creation_time > 0 and current_time - driver_creation_time > MAX_DRIVER_LIFETIME)):
+        
+        # If memory limit exceeded, log it
+        if memory_limit_exceeded:
+            print("Memory limit exceeded. Creating new driver to free memory.")
         
         # Close existing driver if it exists
         if global_driver is not None:
@@ -93,11 +145,32 @@ def initialize_driver(force_new=False):
                 pass
             global_driver = None
             
+        # Force garbage collection to free memory
+        gc.collect()
+            
         # Configure Chrome settings
         chrome_options = Options()
         chrome_options.add_argument("--headless")  # Run browser in invisible mode
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        
+        # Memory-specific settings
+        chrome_options.add_argument("--js-flags=--expose-gc")  # Expose garbage collector to JS
+        chrome_options.add_argument("--single-process")  # Use single process
+        chrome_options.add_argument("--disable-application-cache")  # Disable cache
+        chrome_options.add_argument("--disable-infobars")  # Disable info bars
+        chrome_options.add_argument("--disable-browser-side-navigation")  # Disable browser side navigation
+        chrome_options.add_argument("--disable-features=TranslateUI")  # Disable translation
+        chrome_options.add_argument("--disable-extensions")  # Disable extensions
+        chrome_options.add_argument("--disable-component-extensions-with-background-pages")  # Disable extensions with background pages
+        chrome_options.add_argument("--disable-default-apps")  # Disable default apps
+        chrome_options.add_argument("--disable-breakpad")  # Disable crashpad/breakpad
+        chrome_options.add_argument("--disable-dev-shm-usage")  # Disable shared memory usage
+        chrome_options.add_argument("--disable-features=site-per-process")  # Disable site isolation
+        
+        # Set memory limits to reduce consumption
+        chrome_options.add_argument("--memory-pressure-off")  # Disable memory pressure
+        chrome_options.add_argument("--disable-backgrounding-occluded-windows")  # Don't put backgrounded tabs into efficient mode
         
         # Search for Chrome in possible locations based on OS
         chrome_bin = None
@@ -174,11 +247,10 @@ def initialize_driver(force_new=False):
         chrome_options.add_argument(f"--user-data-dir={temp_dir}")
         
         # Additional settings
-        chrome_options.add_argument("--disable-extensions")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-setuid-sandbox")
         chrome_options.add_argument("--remote-debugging-port=9222")
-        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--window-size=1280,720")  # Smaller window size to reduce memory
         
         # Page load and script timeout settings
         chrome_options.add_argument("--page-load-strategy=none")  # Don't wait for full page load
@@ -228,13 +300,25 @@ def initialize_driver(force_new=False):
             global_driver.set_page_load_timeout(60)  # 60 seconds for page load timeout
             global_driver.set_script_timeout(60)     # 60 seconds for script timeout
             
-            # Update creation time
+            # Update creation time and search counter
             driver_creation_time = current_time
+            searches_with_current_driver = 0
+            
+            # Clear the cache to minimize memory usage
+            try:
+                global_driver.execute_script("window.localStorage.clear();")
+                global_driver.execute_script("window.sessionStorage.clear();")
+                global_driver.execute_script("if(window.gc) window.gc();")  # Trigger JS garbage collection if available
+            except:
+                pass
             
         except Exception as e:
             print(f"Error creating WebDriver: {str(e)}")
             global_driver = None
             raise
+    
+    # Increment search counter
+    searches_with_current_driver += 1
     
     # Return the global driver
     return global_driver
@@ -256,7 +340,7 @@ def get_youtube_videos(query: str, max_results: int = 15, timeout: int = None) -
     # Use configuration default if not provided
     if timeout is None:
         timeout = config.WEBDRIVER_TIMEOUT
-
+    
     # Try up to 3 times with a new driver if needed
     max_retries = 3
     for retry in range(max_retries):
@@ -294,6 +378,9 @@ def get_youtube_videos(query: str, max_results: int = 15, timeout: int = None) -
             min_scrolls = config.MIN_SCROLLS
             max_scrolls = config.MAX_SCROLLS
             
+            # Maximum number of scrolls to limit memory usage
+            max_scrolls = min(max_scrolls, 5)
+            
             # Loop condition: (Not enough videos AND minimum scroll not reached) OR maximum scroll not reached
             while ((len(embeddable_videos) < max_results and scroll_count < min_scrolls) or scroll_count < max_scrolls):
                 # Get page content
@@ -328,74 +415,13 @@ def get_youtube_videos(query: str, max_results: int = 15, timeout: int = None) -
                     # Get view count
                     view_count = 0
                     
-                    # Check different HTML structures
-                    # 1. In new YouTube structure, view info is usually in a span
-                    view_spans = element.find_all('span', {'class': 'style-scope'})
-                    for span in view_spans:
-                        span_text = span.text.strip()
-                        # Check view count formats (1,4 Mn views, 1.4M views, 756 B views, etc.)
-                        view_match = re.search(r'([\d,.]+)\s*(?:B|K|M|Mn|bin|milyon|milyar)?\s*(?:görüntüleme|views)', span_text)
-                        if view_match:
-                            try:
-                                # Get the base number first
-                                if ',' in view_match.group(1) and '.' not in view_match.group(1):
-                                    # Turkish format: 1,4 Mn
-                                    view_base = float(view_match.group(1).replace(',', '.'))
-                                else:
-                                    # English format: 1.4M or plain number: 1400
-                                    view_base = float(view_match.group(1).replace(',', ''))
-                                
-                                # Determine multiplier
-                                multiplier = 1
-                                if 'B ' in span_text or 'bin' in span_text:
-                                    multiplier = 1000
-                                elif 'K' in span_text:
-                                    multiplier = 1000
-                                elif 'M' in span_text or 'Mn' in span_text or 'milyon' in span_text:
-                                    multiplier = 1000000
-                                elif 'milyar' in span_text:
-                                    multiplier = 1000000000
-                                
-                                view_count = int(view_base * multiplier)
-                                break
-                            except ValueError:
-                                continue
-                    
-                    # 2. Alternatively, check in aria-label
-                    if view_count == 0:
-                        aria_label = title_element.get('aria-label', '')
-                        if aria_label:
-                            view_match = re.search(r'([\d,.]+)\s*(?:B|K|M|Mn|bin|milyon|milyar)?\s*(?:görüntüleme|views)', aria_label)
-                            if view_match:
-                                try:
-                                    # Get the base number first
-                                    if ',' in view_match.group(1) and '.' not in view_match.group(1):
-                                        # Turkish format: 1,4 Mn
-                                        view_base = float(view_match.group(1).replace(',', '.'))
-                                    else:
-                                        # English format: 1.4M or plain number: 1400
-                                        view_base = float(view_match.group(1).replace(',', ''))
-                                    
-                                    # Determine multiplier
-                                    multiplier = 1
-                                    if 'B ' in aria_label or 'bin' in aria_label:
-                                        multiplier = 1000
-                                    elif 'K' in aria_label:
-                                        multiplier = 1000
-                                    elif 'M' in aria_label or 'Mn' in aria_label or 'milyon' in aria_label:
-                                        multiplier = 1000000
-                                    elif 'milyar' in aria_label or 'Mr' in aria_label:
-                                        multiplier = 1000000000
-                                    
-                                    view_count = int(view_base * multiplier)
-                                except ValueError:
-                                    view_count = 0
-                    
-                    # 3. Check in metadata
-                    if view_count == 0:
-                        meta_spans = element.find_all('span', {'class': 'inline-metadata-item'})
-                        for span in meta_spans:
+                    # Check different HTML structures (simplified approach to reduce parsing)
+                    try:
+                        # Just get all spans with text
+                        all_spans = element.find_all('span')
+                        for span in all_spans:
                             span_text = span.text.strip()
+                            # Check for view count patterns
                             view_match = re.search(r'([\d,.]+)\s*(?:B|K|M|Mn|bin|milyon|milyar)?\s*(?:görüntüleme|views)', span_text)
                             if view_match:
                                 try:
@@ -415,13 +441,16 @@ def get_youtube_videos(query: str, max_results: int = 15, timeout: int = None) -
                                         multiplier = 1000
                                     elif 'M' in span_text or 'Mn' in span_text or 'milyon' in span_text:
                                         multiplier = 1000000
-                                    elif 'milyar' in span_text or 'Mr' in span_text:
+                                    elif 'milyar' in span_text:
                                         multiplier = 1000000000
                                     
                                     view_count = int(view_base * multiplier)
                                     break
                                 except ValueError:
                                     continue
+                    except Exception as e:
+                        print(f"Error parsing view count: {e}")
+                        # Continue with view count as 0
                     
                     # Check embeddability immediately
                     if check_embeddable(video_id):
@@ -455,10 +484,34 @@ def get_youtube_videos(query: str, max_results: int = 15, timeout: int = None) -
                 if scroll_count >= min_scrolls and len(embeddable_videos) >= max_results:
                     print(f"Exceeded minimum scroll count ({min_scrolls}) and found enough videos ({len(embeddable_videos)}). Stopping.")
                     break
+                
+                # Clear memory after each scroll
+                try:
+                    if 'soup' in locals():
+                        del soup
+                    if 'page_source' in locals():
+                        del page_source
+                    gc.collect()
+                except:
+                    pass
             
             # Sort results by view count
             embeddable_videos.sort(key=lambda x: x['view_count'], reverse=True)
-            return embeddable_videos[:max_results]  # Return only the requested number of videos
+            
+            # Clean up BeautifulSoup objects and large variables to free memory
+            try:
+                if 'soup' in locals():
+                    del soup
+                if 'page_source' in locals():
+                    del page_source
+                if 'video_elements' in locals():
+                    del video_elements
+                gc.collect()
+            except:
+                pass
+                
+            # Return only the requested number of videos
+            return embeddable_videos[:max_results]
         
         except Exception as e:
             print(f"Error during YouTube search: {str(e)}")
@@ -484,15 +537,27 @@ def shutdown_driver():
     """
     Safely shutdown the global WebDriver instance.
     """
-    global global_driver
+    global global_driver, searches_with_current_driver
     
     if global_driver is not None:
         try:
+            # Clear cache before quitting
+            try:
+                global_driver.execute_script("window.localStorage.clear();")
+                global_driver.execute_script("window.sessionStorage.clear();")
+                global_driver.execute_script("if(window.gc) window.gc();")
+            except:
+                pass
+                
             global_driver.quit()
         except:
             pass
         global_driver = None
+        searches_with_current_driver = 0
         print("WebDriver shutdown successfully")
+        
+        # Force garbage collection
+        gc.collect()
 
 def check_embeddable(video_id: str) -> bool:
     """
