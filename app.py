@@ -5,15 +5,24 @@ Flask application for YouTube embedding service.
 import os
 import json
 import subprocess
-from flask import Flask, jsonify, request
-from api.client import get_courses_from_api, save_lecture_videos_to_api
-from youtube.processor import get_lecture_videos
-from utils.scheduler import save_results_to_json
+import logging
 import threading
 import time
 import schedule
 import config
 import glob
+
+from flask import Flask, jsonify, request
+from api.client import get_courses_from_api, save_lecture_videos_to_api
+from youtube.processor import get_lecture_videos
+from utils.scheduler import save_results_to_json
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -36,13 +45,13 @@ def job():
     
     with job_lock:
         if job_running:
-            print("Job already running, skipping...")
+            logger.warning("Job already running, skipping...")
             return
         job_running = True
     
     try:
         start_time = time.strftime('%Y-%m-%d %H:%M:%S')
-        print(f"Starting YouTube video search process... {start_time}")
+        logger.info(f"Starting YouTube video search process at {start_time}")
         
         # Get schools on each run (to refresh token)
         current_schools = get_courses_from_api()
@@ -56,13 +65,17 @@ def job():
             return
         
         # Search for YouTube videos for all schools and lectures
-        print("Searching for YouTube videos for all schools and lectures...")
+        logger.info("Searching for YouTube videos for all schools and lectures...")
         
-        # Search for videos per lecture
-        lecture_videos = get_lecture_videos(current_schools, max_results_per_lecture=10)
+        # Search for videos per lecture with shared driver
+        lecture_videos = get_lecture_videos(
+            current_schools, 
+            max_results_per_lecture=config.MAX_RESULTS_PER_LECTURE,
+            reuse_driver=True  # Tek driver kullanarak performansı artır ve oturum hatalarını önle
+        )
         
         # Show results
-        print(f"\nFound a total of {len(lecture_videos)} videos.")
+        logger.info(f"Found a total of {len(lecture_videos)} videos.")
         
         # Save results to API
         if lecture_videos:
@@ -80,15 +93,15 @@ def job():
             "video_count": len(lecture_videos)
         }
         
-        print(f"Process completed. {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Process completed at {time.strftime('%Y-%m-%d %H:%M:%S')}")
         
     except Exception as e:
+        logger.error(f"Error in job: {str(e)}")
         last_job_result = {
             "status": f"Error: {str(e)}",
             "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
             "video_count": 0
         }
-        print(f"Error in job: {str(e)}")
     finally:
         with job_lock:
             job_running = False
@@ -100,8 +113,8 @@ def scheduler_thread():
     schedule_time = config.SCHEDULE_TIME
     schedule.every().day.at(schedule_time).do(job)
     
-    print(f"YouTube video search service started. {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Will run automatically every day at {schedule_time}.")
+    logger.info(f"YouTube video search service started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Will run automatically every day at {schedule_time}.")
     
     # Check for first run
     current_hour = time.localtime().tm_hour
@@ -110,7 +123,7 @@ def scheduler_thread():
     schedule_min = int(schedule_time.split(':')[1])
     
     if current_hour == schedule_hour and current_min >= schedule_min and current_min < schedule_min + 2:
-        print("Matched start time, running immediately...")
+        logger.info("Matched start time, running immediately...")
         job()
     
     # Infinite loop to check scheduler
@@ -119,7 +132,7 @@ def scheduler_thread():
             schedule.run_pending()
             time.sleep(60)  # Check every minute
         except Exception as e:
-            print(f"Scheduler error: {str(e)}")
+            logger.error(f"Scheduler error: {str(e)}")
             # Wait 5 minutes and try again on error
             time.sleep(300)
 

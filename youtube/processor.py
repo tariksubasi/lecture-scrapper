@@ -4,7 +4,8 @@ Process lecture video information from schools, courses, and lectures.
 
 import sys
 import time
-from typing import List, Dict, Any
+import logging
+from typing import List, Dict, Any, Optional
 from .search import get_youtube_videos, initialize_driver, close_driver
 from selenium import webdriver
 
@@ -12,13 +13,17 @@ from selenium import webdriver
 sys.path.append('..')
 import config
 
-def get_lecture_videos(schools: List[Dict[str, Any]], max_results_per_lecture: int = None) -> List[Dict[str, Any]]:
+# Set up logger
+logger = logging.getLogger(__name__)
+
+def get_lecture_videos(schools: List[Dict[str, Any]], max_results_per_lecture: int = None, reuse_driver: bool = True) -> List[Dict[str, Any]]:
     """
     Searches for YouTube videos for all schools, courses, and lectures and collects the results.
     
     Args:
         schools (list): List containing school, course, and lecture information
         max_results_per_lecture (int): Maximum number of videos to search for per lecture
+        reuse_driver (bool): Whether to reuse the same driver for all searches
         
     Returns:
         list: List of lecture videos
@@ -29,61 +34,100 @@ def get_lecture_videos(schools: List[Dict[str, Any]], max_results_per_lecture: i
         
     lecture_video_list = []
     
-    # In Heroku environment, create a new driver for each search
-    # This avoids session timeout and invalid session ID errors
+    # Driver yeniden kullanımı veya her arama için yeni driver oluşturma
+    shared_driver = None
     
-    for school in schools:
-        school_type = school.get("schoolType", "")
-        
-        for course in school["Courses"]:
-            course_name = course["courseName"]
+    try:
+        # Eğer driver yeniden kullanılacaksa, paylaşılan bir driver oluştur
+        if reuse_driver:
+            logger.info("Initializing shared driver for all searches")
+            shared_driver = initialize_driver()
+    
+        for school in schools:
+            school_type = school.get("schoolType", "")
             
-            for lecture in course["Lectures"]:
-                lecture_id = lecture["lectureId"]
-                lecture_name = lecture["lectureName"]
+            for course in school["Courses"]:
+                course_name = course["courseName"]
                 
-                # Create search query - can include school type
-                query = f"{school_type} - {course_name} - {lecture_name}"
-                print(f"\nSearching for: {query}")
-                
-                # Create a fresh driver for each search
-                driver = None
-                try:
-                    # Initialize a new driver for each search
-                    driver = initialize_driver()
+                for lecture in course["Lectures"]:
+                    lecture_id = lecture["lectureId"]
+                    lecture_name = lecture["lectureName"]
                     
-                    # Search YouTube using a dedicated driver instance
-                    videos = get_youtube_videos(query, max_results=max_results_per_lecture, driver=driver)
+                    # Create search query - can include school type
+                    query = f"{school_type} - {course_name} - {lecture_name}"
+                    logger.info(f"Searching for: {query}")
                     
-                    # Add results to list
-                    for video in videos:
-                        video_info = {
-                            "lectureId": lecture_id,
-                            "videoName": video["title"],
-                            "youtubeVideoID": video["video_id"],
-                            "url": video["watch_url"],
-                            "embedUrl": video["embed_url"],
-                            "viewCount": video["view_count"]
-                        }
-                        lecture_video_list.append(video_info)
-                        
-                    print(f"Found {len(videos)} videos for {lecture_name}.")
+                    # Try with retry logic
+                    success = False
+                    max_retries = 2
                     
-                    # Force GC between searches
+                    for attempt in range(max_retries):
+                        try:
+                            # Eğer paylaşılan driver kullanıyorsak ve bir hata oluştuysa yeniden oluştur
+                            if reuse_driver and shared_driver is None:
+                                shared_driver = initialize_driver()
+                                
+                            # Paylaşılan driver veya her seferinde yeni driver oluştur
+                            current_driver = shared_driver if reuse_driver else None
+                            
+                            # Perform YouTube search
+                            videos = get_youtube_videos(
+                                query, 
+                                max_results=max_results_per_lecture, 
+                                driver=current_driver
+                            )
+                            
+                            # Add results to list
+                            for video in videos:
+                                # Alan adlarını normalize et (videoId yerine video_id gibi)
+                                video_id = video.get("video_id") or video.get("videoId")
+                                if not video_id:
+                                    logger.warning(f"Skipping video without ID: {video.get('title')}")
+                                    continue
+                                    
+                                # API'ye gönderilecek video bilgilerini formatla
+                                video_info = {
+                                    "lectureId": lecture_id,
+                                    "videoName": video.get("title"),
+                                    "youtubeVideoID": video_id,
+                                    "url": video.get("watch_url") or video.get("url"),
+                                    "embedUrl": video.get("embed_url") or f"https://www.youtube.com/embed/{video_id}",
+                                    "viewCount": video.get("view_count", 0)
+                                }
+                                lecture_video_list.append(video_info)
+                            
+                            logger.info(f"Found {len(videos)} videos for {lecture_name}.")
+                            success = True
+                            break
+                            
+                        except Exception as e:
+                            logger.error(f"Error searching for videos for {lecture_name} (attempt {attempt+1}/{max_retries}): {str(e)}")
+                            
+                            # Driver hatalıysa, paylaşılan driver'ı yeniden oluştur
+                            if reuse_driver:
+                                try:
+                                    if shared_driver:
+                                        close_driver(shared_driver)
+                                except:
+                                    pass
+                                shared_driver = None
+                                time.sleep(2)  # Driver yeniden oluşturmadan önce kısa bir bekleme
+                    
+                    # Tüm denemeler başarısız olduysa log oluştur
+                    if not success:
+                        logger.error(f"Failed to search for videos for {lecture_name} after {max_retries} attempts")
+                    
+                    # Aramalar arasında bellek temizliği yap
                     import gc
                     gc.collect()
                     
-                except Exception as e:
-                    print(f"Error searching for videos for {lecture_name}: {str(e)}")
-                finally:
-                    # Close the driver after each search
-                    if driver:
-                        try:
-                            close_driver(driver)
-                        except Exception as e:
-                            print(f"Error closing driver: {str(e)}")
-                    
-                    # Add a small delay between searches to release resources
+                    # Aramalar arasında küçük bir bekleme ekle
                     time.sleep(1)
+    
+    finally:
+        # Paylaşılan driver kullanıyorsak, işlem bittiğinde kapat
+        if reuse_driver and shared_driver:
+            logger.info("Closing shared driver")
+            close_driver(shared_driver)
     
     return lecture_video_list 

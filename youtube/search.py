@@ -8,31 +8,43 @@ import os
 import tempfile
 import glob
 import platform
-from typing import List, Dict, Any, Set, Optional
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException, InvalidSessionIdException, NoSuchElementException, StaleElementReferenceException
-from bs4 import BeautifulSoup
-import requests
+import logging
+import gc
 import sys
 import subprocess
-import gc
-import logging
+import requests
+from typing import List, Dict, Any, Set, Optional
+
+# Önce logging kurulumu yap
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Import configuration
 sys.path.append('..')
 import config
 
-# Set up logger
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# 3rd party imports için undetected_chromedriver importu önce yapılmalı
+try:
+    import undetected_chromedriver as uc
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import (
+        TimeoutException, 
+        WebDriverException, 
+        InvalidSessionIdException, 
+        NoSuchElementException, 
+        StaleElementReferenceException
+    )
+    from webdriver_manager.chrome import ChromeDriverManager
+    from bs4 import BeautifulSoup
+except ImportError as e:
+    logger.error(f"Failed to import required modules: {e}")
+    raise
 
 def get_chrome_version(chrome_binary):
     """
@@ -63,69 +75,66 @@ def get_chrome_version(chrome_binary):
                 if version:
                     return version.group(1)
     except Exception as e:
-        print(f"Failed to get Chrome version: {e}")
+        logger.error(f"Failed to get Chrome version: {e}")
     
     return None
 
 def initialize_driver() -> webdriver.Chrome:
     """
     Initialize and configure a Chrome WebDriver for YouTube searches.
-    Optimized for Heroku deployment.
+    Optimized for Heroku deployment. Uses undetected-chromedriver for better compatibility.
     
     Returns:
         webdriver.Chrome: Configured Chrome WebDriver instance
     """
-    logger.info("Initializing new Chrome WebDriver")
+    logger.info("Initializing new Chrome WebDriver with undetected-chromedriver")
     temp_dir = tempfile.mkdtemp()
     
-    chrome_options = Options()
+    # Yapılandırma seçenekleri
+    chrome_options = uc.ChromeOptions()
     
-    # Essential options for Heroku
+    # Temel seçenekler
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-gpu")
     
-    # Performance optimizations
+    # Bellek optimizasyonları
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-plugins-discovery")
     chrome_options.add_argument("--disable-default-apps")
     chrome_options.add_argument("--disable-infobars")
-    chrome_options.add_argument("--disable-notifications")
-    chrome_options.add_argument("--disable-features=TranslateUI")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument("--mute-audio")
     chrome_options.add_argument(f"--user-data-dir={temp_dir}")
     
-    # Memory optimizations
+    # Bellek optimizasyonları
     chrome_options.add_argument("--js-flags=--expose-gc")
     chrome_options.add_argument("--disable-renderer-backgrounding")
     chrome_options.add_argument("--disable-backgrounding-occluded-windows")
     
-    # Page load strategy optimization
+    # Sayfa yükleme stratejisi
     chrome_options.page_load_strategy = 'eager'
     
-    # Use the ChromeDriverManager to find the appropriate driver
     try:
-        # First, try to detect Chrome in Heroku
+        # Önce Heroku ortamında Chrome'u tespit etmeye çalış
         if 'GOOGLE_CHROME_BIN' in os.environ:
             chrome_binary = os.environ.get('GOOGLE_CHROME_BIN')
             logger.info(f"Using Chrome binary from GOOGLE_CHROME_BIN: {chrome_binary}")
             chrome_options.binary_location = chrome_binary
         
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        # undetected_chromedriver kullanarak driver oluştur
+        # Bu yöntem ChromeDriver ve Chrome arasındaki uyumsuzluğu otomatik olarak çözer
+        driver = uc.Chrome(options=chrome_options)
         
-        # Set script timeout for async operations
-        driver.set_script_timeout(config.DRIVER_TIMEOUT_SECONDS)
+        # Zaman aşımı ayarları
         driver.set_page_load_timeout(config.DRIVER_TIMEOUT_SECONDS)
         
-        logger.info("Chrome WebDriver initialized successfully")
+        logger.info("Chrome WebDriver initialized successfully with undetected-chromedriver")
         return driver
     
     except Exception as e:
         logger.error(f"Failed to initialize WebDriver: {str(e)}")
-        # Clean up temp directory if driver initialization fails
+        # Driver oluşturulamazsa geçici dizini temizle
         try:
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
