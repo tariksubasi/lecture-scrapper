@@ -25,10 +25,14 @@ API_URL_TO_SAVE_LECTURE_VIDEOS = API_BASE_URL + API_ENDPOINT_TO_SAVE_LECTURE_VID
 # Duration settings in seconds (default values)
 SCHEDULER_INTERVAL = int(os.environ.get('SCHEDULER_INTERVAL', 3600))  # 1 hour
 
-# YouTube search settings
-MIN_SCROLLS = int(os.environ.get('MIN_SCROLLS', 2))        # Minimum number of scrolls on YouTube
-MAX_SCROLLS = int(os.environ.get('MAX_SCROLLS', 5))        # Maximum number of scrolls on YouTube
-MAX_RESULTS_PER_LECTURE = int(os.environ.get('MAX_RESULTS_PER_LECTURE', 5))  # Reduced from 10 to 5 to conserve memory
+# YouTube search settings - optimized for Heroku
+MIN_SCROLLS = int(os.environ.get('MIN_SCROLLS', 1))        # Minimum number of scrolls on YouTube (reduced to 1)
+MAX_SCROLLS = int(os.environ.get('MAX_SCROLLS', 3))        # Maximum number of scrolls on YouTube (reduced to 3)
+MAX_RESULTS_PER_LECTURE = int(os.environ.get('MAX_RESULTS_PER_LECTURE', 5))  # Maximum videos per lecture (reduced to 5)
+
+# Driver settings
+DRIVER_TIMEOUT_SECONDS = int(os.environ.get('DRIVER_TIMEOUT_SECONDS', 60))  # Timeout for loading pages
+MAX_ATTEMPTS_PER_SEARCH = int(os.environ.get('MAX_ATTEMPTS_PER_SEARCH', 2))  # Max attempts to retry a search
 
 # File paths
 DATABASE_FILE = os.environ.get('DATABASE_FILE', 'data/lecture_videos.json')

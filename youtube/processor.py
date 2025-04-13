@@ -3,6 +3,7 @@ Process lecture video information from schools, courses, and lectures.
 """
 
 import sys
+import time
 from typing import List, Dict, Any
 from .search import get_youtube_videos, initialize_driver, close_driver
 from selenium import webdriver
@@ -28,25 +29,30 @@ def get_lecture_videos(schools: List[Dict[str, Any]], max_results_per_lecture: i
         
     lecture_video_list = []
     
-    # Initialize a single WebDriver instance to be reused for all searches
-    driver = initialize_driver()
+    # In Heroku environment, create a new driver for each search
+    # This avoids session timeout and invalid session ID errors
     
-    try:
-        for school in schools:
-            school_type = school.get("schoolType", "")
+    for school in schools:
+        school_type = school.get("schoolType", "")
+        
+        for course in school["Courses"]:
+            course_name = course["courseName"]
             
-            for course in school["Courses"]:
-                course_name = course["courseName"]
+            for lecture in course["Lectures"]:
+                lecture_id = lecture["lectureId"]
+                lecture_name = lecture["lectureName"]
                 
-                for lecture in course["Lectures"]:
-                    lecture_id = lecture["lectureId"]
-                    lecture_name = lecture["lectureName"]
+                # Create search query - can include school type
+                query = f"{school_type} - {course_name} - {lecture_name}"
+                print(f"\nSearching for: {query}")
+                
+                # Create a fresh driver for each search
+                driver = None
+                try:
+                    # Initialize a new driver for each search
+                    driver = initialize_driver()
                     
-                    # Create search query - can include school type
-                    query = f"{school_type} - {course_name} - {lecture_name}"
-                    print(f"\nSearching for: {query}")
-                    
-                    # Search YouTube using the shared driver instance
+                    # Search YouTube using a dedicated driver instance
                     videos = get_youtube_videos(query, max_results=max_results_per_lecture, driver=driver)
                     
                     # Add results to list
@@ -62,8 +68,22 @@ def get_lecture_videos(schools: List[Dict[str, Any]], max_results_per_lecture: i
                         lecture_video_list.append(video_info)
                         
                     print(f"Found {len(videos)} videos for {lecture_name}.")
-    finally:
-        # Make sure to close the driver when all searches are done
-        close_driver(driver)
+                    
+                    # Force GC between searches
+                    import gc
+                    gc.collect()
+                    
+                except Exception as e:
+                    print(f"Error searching for videos for {lecture_name}: {str(e)}")
+                finally:
+                    # Close the driver after each search
+                    if driver:
+                        try:
+                            close_driver(driver)
+                        except Exception as e:
+                            print(f"Error closing driver: {str(e)}")
+                    
+                    # Add a small delay between searches to release resources
+                    time.sleep(1)
     
     return lecture_video_list 
